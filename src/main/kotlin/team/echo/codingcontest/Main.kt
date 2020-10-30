@@ -5,7 +5,7 @@ import kotlin.math.min
 fun main(args: Array<String>) {
     lvl4("example")
     (1..5).forEach {
-        //lvl4(it.toString())
+        lvl4(it.toString())
     }
 }
 
@@ -45,10 +45,10 @@ fun lvl2(example: String) {
         pricingTable.add(PriceTableEntry(i, priceRanges))
     }
 
-    val lengthToStartingTime = taskLengths.map {taskLength ->
-         val start = pricingTable
-             .filter { it.cumulativeSum.size >= taskLength }
-             .minByOrNull { it.cumulativeSum[taskLength - 1] }!!.start
+    val lengthToStartingTime = taskLengths.map { taskLength ->
+        val start = pricingTable
+            .filter { it.cumulativeSum.size >= taskLength }
+            .minByOrNull { it.cumulativeSum[taskLength - 1] }!!.start
         taskLength to start
     }.toMap()
 
@@ -69,7 +69,16 @@ fun lvl3(example: String) {
     val nOfTasks = lines.drop(1 + nOfPrices)[0].toInt()
     val tasks = lines.drop(1 + nOfPrices + 1)
         .take(nOfTasks)
-        .map { Task3(it.split(" ")[0].toInt(), it.split(" ")[1].toInt(), it.split(" ")[2].toInt(), it.split(" ")[3].toInt()) }
+        .map {
+            Task3(
+                it.split(" ")[0].toInt(),
+                it.split(" ")[1].toInt(),
+                it.split(" ")[2].toInt(),
+                it.split(" ")[3].toInt(),
+                mutableListOf(),
+                mutableSetOf()
+            )
+        }
 
     val resultLines = tasks.map { task ->
         val subList = prices.subList(task.startInterval, task.endInterval + 1)
@@ -93,46 +102,90 @@ fun lvl4(example: String) {
     val nOfTasks = lines.drop(3 + nOfPrices)[0].toInt()
     val tasks = lines.drop(3 + nOfPrices + 1)
         .take(nOfTasks)
-        .map { Task3(it.split(" ")[0].toInt(), it.split(" ")[1].toInt(), it.split(" ")[2].toInt(), it.split(" ")[3].toInt()) }
+        .map {
+            Task3(
+                it.split(" ")[0].toInt(),
+                it.split(" ")[1].toInt(),
+                it.split(" ")[2].toInt(),
+                it.split(" ")[3].toInt(),
+                mutableListOf(),
+                mutableSetOf()
+            )
+        }
 
     val powerMinutes = prices.mapIndexed { index, price ->
-        PowerMinute(index, price.price, maxPower, maxPower)
+        PowerMinute(index, price.price, maxPower, maxPower, mutableListOf())
+    }
+
+    tasks.forEach { task ->
+        (task.startInterval..task.endInterval).forEach { minuteIdx ->
+            task.addMinute(powerMinutes[minuteIdx])
+            powerMinutes[minuteIdx].applicableTasks += task
+        }
     }
 
     var currentCost = 0L
 
-    val resultLines = tasks.map { task ->
-        val usages = mutableListOf<PowerUsage>()
-        var availableMinutes = powerMinutes.filter { it -> it.idx >= task.startInterval && it.idx < task.endInterval }
-            .filter { it.capacity > 0 }
-        var requiredPower = task.power
-        while (requiredPower > 0 && availableMinutes.isNotEmpty()) {
-            val minimum = availableMinutes.minByOrNull { it.price }!!
-            val startTime = availableMinutes.indexOfFirst { it == minimum }
-            if (requiredPower < minimum.capacity) {
-                currentCost += requiredPower*minimum.price
-                requiredPower = 0
-                minimum.capacity -= requiredPower
-                usages.add(PowerUsage(startTime, minimum.capacity))
-            } else {
-                requiredPower -= minimum.capacity
-                currentCost += minimum.capacity*minimum.price
-                minimum.capacity = 0
-                usages.add(PowerUsage(startTime, minimum.capacity))
-            }
-            availableMinutes = powerMinutes.filter { it -> it.idx >= task.startInterval && it.idx < task.endInterval }
-                .filter { it.capacity > 0 }
-        }
+    currentCost = calculate(powerMinutes, currentCost)
 
-        val minimum = availableMinutes.minByOrNull { it.price }
-        val startTime = availableMinutes.indexOfFirst { it == minimum }
-        val usagesAsString = usages.map { "${it.startInterval} ${it.amount}" }.joinToString(" ")
-        "${task.id} ${usagesAsString}"
+
+    println("current cost is : $currentCost and limit is $maxElectricityBill")
+    if (currentCost > maxElectricityBill) {
+        println("TOOOOOOOO HIGH")
     }
 
-    println("current cost is : $currentCost")
+    if (powerMinutes.any { it.openTasks().isNotEmpty() }) {
+        println("NOT ALL DONE :( try again")
+        var minutesInvolved = powerMinutes.filter { it.openTasks().isNotEmpty() }.flatMap { it.openTasks() }
+            .map { (it.endInterval - it.startInterval) }
+
+        powerMinutes.filter { it.idx in minutesInvolved }
+            .forEach { minute ->
+                minute.applicableTasks.forEach { task ->
+                    task.removeUsage(minute)
+                }
+                minute.capacity = minute.initialCapacity
+                currentCost -= minute.capacity*minute.price
+            }
+
+        currentCost = calculate(powerMinutes, currentCost)
+    }
+
+    if (powerMinutes.any { it.openTasks().isNotEmpty() }) {
+        println("STILL NOT ALL DONE :( try again")
+    }
+
+    val resultLines = tasks.map {
+        val usagesAsString = it.usages.map { "${it.startInterval} ${it.amount}" }.joinToString(" ")
+        "${it.id} ${usagesAsString}"
+    }
 
     LevelReader.write(4, example, listOf(resultLines.size.toString()) + resultLines)
+}
+
+private fun calculate(
+    powerMinutes: List<PowerMinute>,
+    currentCost: Long
+): Long {
+    var currentCost1 = currentCost
+    powerMinutes.sortedBy { it.price }
+        .forEach { minute ->
+            val tasksByPriority = minute.openTasks()
+            for (task in tasksByPriority) {
+                if (minute.capacity <= 0) {
+                    break
+                }
+
+                val deductedPower = min(task.getRemainingPower(), minute.capacity)
+                currentCost1 += deductedPower * minute.price
+                minute.capacity -= deductedPower
+                task.usages.add(PowerUsage(minute.idx, deductedPower))
+                if (minute.capacity <= 0) {
+                    minute.applicableTasks.forEach { it.minuteUsed(minute) }
+                }
+            }
+        }
+    return currentCost1
 }
 
 data class PowerUsage(
@@ -144,15 +197,52 @@ data class PowerMinute(
     val idx: Int,
     val price: Long,
     var capacity: Int,
-    val initialCapacity: Int
-)
+    val initialCapacity: Int,
+    val applicableTasks: MutableList<Task3>
+) {
 
-data class Task3(
+    fun openTasks(): MutableList<Task3> {
+        return applicableTasks.filter { it.getRemainingPower() > 0 }
+            .sortedBy { it.getPriority() }
+            .toMutableList()
+    }
+
+}
+
+class Task3(
     val id: Int,
     val power: Int,
     val startInterval: Int,
-    val endInterval: Int
-)
+    val endInterval: Int,
+    val usages: MutableList<PowerUsage>,
+    val availableSlots: MutableSet<PowerMinute>
+) {
+
+    fun getPriority(): Int {
+        if (endInterval == startInterval) {
+            return 1000000
+        }
+        return getRemainingPower() * 100 / (availableSlots.size)
+    }
+
+    fun getRemainingPower(): Int {
+        return power - usages.map { it.amount }.sum()
+    }
+
+    fun minuteUsed(minute: PowerMinute) {
+        availableSlots.remove(minute)
+    }
+
+    fun addMinute(minute: PowerMinute) {
+        availableSlots.add(minute)
+    }
+
+    fun removeUsage(minute: PowerMinute) {
+        if (usages.any { it.startInterval == minute.idx }) {
+            usages.removeIf { it.startInterval == minute.idx }
+        }
+    }
+}
 
 data class PriceTableEntry(
     val start: Int,
